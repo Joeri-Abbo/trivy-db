@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/samber/oops"
 
@@ -24,6 +25,8 @@ func FileWalk(root string, walkFn func(r io.Reader, path string) error) error {
 		return eb.Wrapf(err, "failed to load overrides")
 	}
 
+	var processed int
+	walkStart := time.Now()
 	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		eb := eb.With("path", path)
 		if err != nil {
@@ -76,10 +79,23 @@ func FileWalk(root string, walkFn func(r io.Reader, path string) error) error {
 		if err = walkFn(r, path); err != nil {
 			return eb.Wrapf(err, "walk error")
 		}
+		processed++
+		if processed%50000 == 0 {
+			log.Info("FileWalk progress",
+				log.DirPath(root),
+				log.Int("files", processed),
+				log.String("elapsed", time.Since(walkStart).Round(time.Second).String()))
+		}
 		return nil
 	})
 	if err != nil {
 		return eb.Wrapf(err, "file walk error")
+	}
+	if processed >= 50000 {
+		log.Info("FileWalk complete",
+			log.DirPath(root),
+			log.Int("files", processed),
+			log.String("elapsed", time.Since(walkStart).Round(time.Second).String()))
 	}
 	return nil
 }

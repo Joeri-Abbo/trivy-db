@@ -55,6 +55,8 @@ func (vs *VulnSrc) Update(dir string) error {
 	rootDir := filepath.Join(dir, vulnListDir, apiDir)
 	eb := oops.In("nvd").With("root_dir", rootDir)
 
+	vs.logger.Info("Walking NVD cache", log.String("root_dir", rootDir))
+	walkStart := time.Now()
 	var cves []Cve
 	buffer := &bytes.Buffer{}
 	err := utils.FileWalk(rootDir, func(r io.Reader, filePath string) error {
@@ -68,11 +70,19 @@ func (vs *VulnSrc) Update(dir string) error {
 		}
 		buffer.Reset()
 		cves = append(cves, cve)
+		if len(cves)%25000 == 0 {
+			vs.logger.Info("Loaded CVEs",
+				log.Int("count", len(cves)),
+				log.String("elapsed", time.Since(walkStart).Round(time.Second).String()))
+		}
 		return nil
 	})
 	if err != nil {
 		return eb.Wrapf(err, "walk error")
 	}
+	vs.logger.Info("Finished loading CVEs",
+		log.Int("total", len(cves)),
+		log.String("elapsed", time.Since(walkStart).Round(time.Second).String()))
 
 	if err = vs.save(cves); err != nil {
 		return eb.Wrapf(err, "save error")
@@ -82,22 +92,33 @@ func (vs *VulnSrc) Update(dir string) error {
 }
 
 func (vs *VulnSrc) commit(tx *bolt.Tx, cves []Cve) error {
-	for _, cve := range cves {
+	start := time.Now()
+	for i, cve := range cves {
 		if err := vs.Put(tx, cve); err != nil {
 			return err
+		}
+		if (i+1)%25000 == 0 {
+			vs.logger.Info("Committed CVEs",
+				log.Int("done", i+1),
+				log.Int("total", len(cves)),
+				log.String("elapsed", time.Since(start).Round(time.Second).String()))
 		}
 	}
 	return nil
 }
 
 func (vs *VulnSrc) save(cves []Cve) error {
-	vs.logger.Info("NVD batch update")
+	vs.logger.Info("NVD batch update", log.Int("cves", len(cves)))
+	start := time.Now()
 	err := vs.BatchUpdate(func(tx *bolt.Tx) error {
 		return vs.commit(tx, cves)
 	})
 	if err != nil {
 		return oops.Wrapf(err, "error in batch update")
 	}
+	vs.logger.Info("NVD batch update complete",
+		log.Int("cves", len(cves)),
+		log.String("elapsed", time.Since(start).Round(time.Second).String()))
 	return nil
 }
 
